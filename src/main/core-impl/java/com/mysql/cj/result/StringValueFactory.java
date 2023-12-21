@@ -46,138 +46,135 @@ import com.mysql.cj.util.StringUtils;
  */
 public class StringValueFactory implements ValueFactory<String> {
 
-    protected PropertySet pset = null;
+  protected PropertySet pset = null;
+  private String encoding;
 
-    public StringValueFactory(PropertySet pset) {
-        this.pset = pset;
-    }
+  public StringValueFactory(PropertySet pset) {
+    this.pset = pset;
+    this.encoding = this.pset.getStringProperty(PropertyKey.characterEncoding).getValue();
+  }
 
-    @Override
-    public void setPropertySet(PropertySet pset) {
-        this.pset = pset;
-    }
+  @Override
+  public void setPropertySet(PropertySet pset) {
+    this.pset = pset;
+  }
 
-    /**
-     * Create a string from InternalDate. The fields are formatted in a YYYY-mm-dd format.
-     *
-     * @param idate
-     *            {@link InternalDate}
-     * @return string
-     */
-    @Override
-    public String createFromDate(InternalDate idate) {
-        // essentially the same string we received from the server, no TZ interpretation
-        return String.format("%04d-%02d-%02d", idate.getYear(), idate.getMonth(), idate.getDay());
-    }
+  /**
+   * Create a string from InternalDate. The fields are formatted in a YYYY-mm-dd format.
+   *
+   * @param idate {@link InternalDate}
+   * @return string
+   */
+  @Override
+  public String createFromDate(InternalDate idate) {
+    // essentially the same string we received from the server, no TZ interpretation
+    return String.format("%04d-%02d-%02d", idate.getYear(), idate.getMonth(), idate.getDay());
+  }
 
-    /**
-     * Create a string from InternalTime. The fields are formatted in a HH:MM:SS[.nnnnnnnnn] format.
-     *
-     * @param it
-     *            {@link InternalTime}
-     * @return string
-     */
-    @Override
-    public String createFromTime(InternalTime it) {
-        return it.toString();
-    }
+  /**
+   * Create a string from InternalTime. The fields are formatted in a HH:MM:SS[.nnnnnnnnn] format.
+   *
+   * @param it {@link InternalTime}
+   * @return string
+   */
+  @Override
+  public String createFromTime(InternalTime it) {
+    return it.toString();
+  }
 
-    /**
-     * Create a string from time fields. The fields are formatted by concatenating the result of {@link #createFromDate(InternalDate)} and {@link
-     * #createFromTime(InternalTime)}.
-     *
-     * @param its
-     *            {@link InternalTimestamp}
-     * @return string
-     */
-    @Override
-    public String createFromTimestamp(InternalTimestamp its) {
-        return String.format("%s %s", createFromDate(its),
-                createFromTime(new InternalTime(its.getHours(), its.getMinutes(), its.getSeconds(), its.getNanos(), its.getScale())));
-    }
+  /**
+   * Create a string from time fields. The fields are formatted by concatenating the result of
+   * {@link #createFromDate(InternalDate)} and {@link #createFromTime(InternalTime)}.
+   *
+   * @param its {@link InternalTimestamp}
+   * @return string
+   */
+  @Override
+  public String createFromTimestamp(InternalTimestamp its) {
+    return String.format("%s %s", createFromDate(its),
+        createFromTime(
+            new InternalTime(its.getHours(), its.getMinutes(), its.getSeconds(), its.getNanos(), its.getScale())));
+  }
 
-    /**
-     * Create a string from time fields. The fields are formatted by concatenating the result of {@link #createFromDate(InternalDate)} and {@link
-     * #createFromTime(InternalTime)}.
-     *
-     * @param its
-     *            {@link InternalTimestamp}
-     * @return string
-     */
-    @Override
-    public String createFromDatetime(InternalTimestamp its) {
-        return String.format("%s %s", createFromDate(its),
-                createFromTime(new InternalTime(its.getHours(), its.getMinutes(), its.getSeconds(), its.getNanos(), its.getScale())));
-    }
+  /**
+   * Create a string from time fields. The fields are formatted by concatenating the result of
+   * {@link #createFromDate(InternalDate)} and {@link #createFromTime(InternalTime)}.
+   *
+   * @param its {@link InternalTimestamp}
+   * @return string
+   */
+  @Override
+  public String createFromDatetime(InternalTimestamp its) {
+    return String.format("%s %s", createFromDate(its),
+        createFromTime(
+            new InternalTime(its.getHours(), its.getMinutes(), its.getSeconds(), its.getNanos(), its.getScale())));
+  }
 
-    @Override
-    public String createFromLong(long l) {
-        return String.valueOf(l);
-    }
+  @Override
+  public String createFromLong(long l) {
+    return String.valueOf(l);
+  }
 
-    @Override
-    public String createFromBigInteger(BigInteger i) {
-        return i.toString();
-    }
+  @Override
+  public String createFromBigInteger(BigInteger i) {
+    return i.toString();
+  }
 
-    @Override
-    public String createFromDouble(double d) {
-        return String.valueOf(d);
-    }
+  @Override
+  public String createFromDouble(double d) {
+    return String.valueOf(d);
+  }
 
-    @Override
-    public String createFromBigDecimal(BigDecimal d) {
-        return d.toString();
-    }
+  @Override
+  public String createFromBigDecimal(BigDecimal d) {
+    return d.toString();
+  }
 
-    /**
-     * Interpret the given byte array as a string. This value factory needs to know the encoding to interpret the string. The default (null) will interpret the
-     * byte array using the platform encoding.
-     *
-     * @param bytes
-     *            byte array
-     * @param offset
-     *            offset
-     * @param length
-     *            data length in bytes
-     * @param f
-     *            field
-     * @return string
-     */
-    @Override
-    public String createFromBytes(byte[] bytes, int offset, int length, Field f) {
-        return StringUtils.toString(bytes, offset, length,
-                f.getCollationIndex() == CharsetMapping.MYSQL_COLLATION_INDEX_binary ? this.pset.getStringProperty(PropertyKey.characterEncoding).getValue()
-                        : f.getEncoding());
-    }
+  /**
+   * Interpret the given byte array as a string. This value factory needs to know the encoding to interpret the string.
+   * The default (null) will interpret the byte array using the platform encoding.
+   *
+   * @param bytes  byte array
+   * @param offset offset
+   * @param length data length in bytes
+   * @param f      field
+   * @return string
+   */
+  @Override
+  public String createFromBytes(byte[] bytes, int offset, int length, Field f) {
+    return StringUtils.toString(bytes, offset, length,
+        f.getCollationIndex() == CharsetMapping.MYSQL_COLLATION_INDEX_binary
+            ? this.encoding
+            : f.getEncoding());
+  }
 
-    @Override
-    public String createFromBit(byte[] bytes, int offset, int length) {
-        return createFromLong(DataTypeUtil.bitToLong(bytes, offset, length));
-    }
+  @Override
+  public String createFromBit(byte[] bytes, int offset, int length) {
+    return createFromLong(DataTypeUtil.bitToLong(bytes, offset, length));
+  }
 
-    @Override
-    public String createFromYear(long l) {
-        if (this.pset.getBooleanProperty(PropertyKey.yearIsDateType).getValue()) {
-            if (l < 100) {
-                if (l <= 69) {
-                    l += 100;
-                }
-                l += 1900;
-            }
-            return createFromDate(new InternalDate((int) l, 1, 1));
+  @Override
+  public String createFromYear(long l) {
+    if (this.pset.getBooleanProperty(PropertyKey.yearIsDateType).getValue()) {
+      if (l < 100) {
+        if (l <= 69) {
+          l += 100;
         }
-        return createFromLong(l);
+        l += 1900;
+      }
+      return createFromDate(new InternalDate((int) l, 1, 1));
     }
+    return createFromLong(l);
+  }
 
-    @Override
-    public String createFromNull() {
-        return null;
-    }
+  @Override
+  public String createFromNull() {
+    return null;
+  }
 
-    @Override
-    public String getTargetTypeName() {
-        return String.class.getName();
-    }
+  @Override
+  public String getTargetTypeName() {
+    return String.class.getName();
+  }
 
 }

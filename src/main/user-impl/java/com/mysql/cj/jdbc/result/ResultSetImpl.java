@@ -59,8 +59,6 @@ import java.time.OffsetDateTime;
 import java.time.OffsetTime;
 import java.time.ZonedDateTime;
 import java.util.Calendar;
-import java.util.HashSet;
-import java.util.Set;
 
 import com.mysql.cj.Messages;
 import com.mysql.cj.MysqlType;
@@ -86,7 +84,6 @@ import com.mysql.cj.jdbc.StatementImpl;
 import com.mysql.cj.jdbc.exceptions.NotUpdatable;
 import com.mysql.cj.jdbc.exceptions.SQLError;
 import com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping;
-import com.mysql.cj.log.ProfilerEvent;
 import com.mysql.cj.log.ProfilerEventHandler;
 import com.mysql.cj.protocol.ColumnDefinition;
 import com.mysql.cj.protocol.ResultsetRows;
@@ -115,7 +112,6 @@ import com.mysql.cj.result.StringValueFactory;
 import com.mysql.cj.result.UtilCalendarValueFactory;
 import com.mysql.cj.result.ValueFactory;
 import com.mysql.cj.result.ZonedDateTimeValueFactory;
-import com.mysql.cj.util.LogUtils;
 import com.mysql.cj.util.StringUtils;
 
 public class ResultSetImpl extends NativeResultset implements ResultSetInternalMethods, WarningListener {
@@ -173,9 +169,6 @@ public class ResultSetImpl extends NativeResultset implements ResultSetInternalM
 
   JdbcPreparedStatement statementUsedForFetchingRows;
 
-  protected boolean useUsageAdvisor = false;
-  protected boolean gatherPerfMetrics = false;
-
   /** Is ResultSet.TYPE_FORWARD_ONLY scroll tolerant? */
   protected boolean scrollTolerant = false;
 
@@ -201,6 +194,7 @@ public class ResultSetImpl extends NativeResultset implements ResultSetInternalM
   private ValueFactory<InputStream> binaryStreamValueFactory;
   private ValueFactory<Time> defaultTimeValueFactory;
   private ValueFactory<Timestamp> defaultTimestampValueFactory;
+  private ValueFactory<String> stringValueFactory;
 
   private ValueFactory<Calendar> defaultUtilCalendarValueFactory;
 
@@ -262,8 +256,6 @@ public class ResultSetImpl extends NativeResultset implements ResultSetInternalM
     this.padCharsWithSpace = pset.getBooleanProperty(PropertyKey.padCharsWithSpace).getValue();
     this.treatMysqlDatetimeAsTimestamp = pset.getBooleanProperty(PropertyKey.treatMysqlDatetimeAsTimestamp).getValue();
     this.yearIsDateType = pset.getBooleanProperty(PropertyKey.yearIsDateType).getValue();
-    this.useUsageAdvisor = pset.getBooleanProperty(PropertyKey.useUsageAdvisor).getValue();
-    this.gatherPerfMetrics = pset.getBooleanProperty(PropertyKey.gatherPerfMetrics).getValue();
     this.scrollTolerant = pset.getBooleanProperty(PropertyKey.scrollTolerantForwardOnly).getValue();
 
     this.booleanValueFactory = new BooleanValueFactory(pset);
@@ -275,9 +267,8 @@ public class ResultSetImpl extends NativeResultset implements ResultSetInternalM
     this.doubleValueFactory = new DoubleValueFactory(pset);
     this.bigDecimalValueFactory = new BigDecimalValueFactory(pset);
     this.binaryStreamValueFactory = new BinaryStreamValueFactory(pset);
+    this.stringValueFactory = new StringValueFactory(pset);
 
-    this.defaultTimeValueFactory = new SqlTimeValueFactory(pset, null,
-        this.session.getServerSession().getDefaultTimeZone(), this);
     this.defaultTimestampValueFactory = new SqlTimestampValueFactory(pset, null,
         this.session.getServerSession().getDefaultTimeZone(),
         this.session.getServerSession().getSessionTimeZone());
@@ -330,41 +321,6 @@ public class ResultSetImpl extends NativeResultset implements ResultSetInternalM
   public void initializeWithMetadata() throws SQLException {
     synchronized (checkClosed().getConnectionMutex()) {
       initRowsWithMetadata();
-
-      if (this.useUsageAdvisor) {
-        this.columnUsed = new boolean[this.columnDefinition.getFields().length];
-        this.pointOfOrigin = LogUtils.findCallingClassAndMethod(new Throwable());
-        this.resultId = resultCounter++;
-        this.eventSink = this.session.getProfilerEventHandler();
-      }
-
-      if (this.gatherPerfMetrics) {
-        this.session.getProtocol().getMetricsHolder().incrementNumberOfResultSetsCreated();
-
-        Set<String> tableNamesSet = new HashSet<>();
-
-        for (int i = 0; i < this.columnDefinition.getFields().length; i++) {
-          Field f = this.columnDefinition.getFields()[i];
-
-          String tableName = f.getOriginalTableName();
-
-          if (tableName == null) {
-            tableName = f.getTableName();
-          }
-
-          if (tableName != null) {
-            if (this.connection.lowerCaseTableNames()) {
-              // on windows, table names are not case-sensitive;
-              // adjusting names to hit the same keys in tableNamesSet
-              tableName = tableName.toLowerCase();
-            }
-
-            tableNamesSet.add(tableName);
-          }
-        }
-
-        this.session.getProtocol().getMetricsHolder().reportNumberOfTablesAccessed(tableNamesSet.size());
-      }
     }
   }
 
@@ -493,24 +449,18 @@ public class ResultSetImpl extends NativeResultset implements ResultSetInternalM
    * @throws SQLException if the index is out of bounds
    */
   protected final void checkColumnBounds(int columnIndex) throws SQLException {
-    synchronized (checkClosed().getConnectionMutex()) {
-      if (columnIndex < 1) {
-        throw SQLError.createSQLException(
-            Messages.getString("ResultSet.Column_Index_out_of_range_low",
-                new Object[] { Integer.valueOf(columnIndex),
-                    Integer.valueOf(this.columnDefinition.getFields().length) }),
-            MysqlErrorNumbers.SQL_STATE_ILLEGAL_ARGUMENT, getExceptionInterceptor());
-      } else if (columnIndex > this.columnDefinition.getFields().length) {
-        throw SQLError.createSQLException(
-            Messages.getString("ResultSet.Column_Index_out_of_range_high",
-                new Object[] { Integer.valueOf(columnIndex),
-                    Integer.valueOf(this.columnDefinition.getFields().length) }),
-            MysqlErrorNumbers.SQL_STATE_ILLEGAL_ARGUMENT, getExceptionInterceptor());
-      }
-
-      if (this.useUsageAdvisor) {
-        this.columnUsed[columnIndex - 1] = true;
-      }
+    if (columnIndex < 1) {
+      throw SQLError.createSQLException(
+          Messages.getString("ResultSet.Column_Index_out_of_range_low",
+              new Object[] { Integer.valueOf(columnIndex),
+                  Integer.valueOf(this.columnDefinition.getFields().length) }),
+          MysqlErrorNumbers.SQL_STATE_ILLEGAL_ARGUMENT, getExceptionInterceptor());
+    } else if (columnIndex > this.columnDefinition.getFields().length) {
+      throw SQLError.createSQLException(
+          Messages.getString("ResultSet.Column_Index_out_of_range_high",
+              new Object[] { Integer.valueOf(columnIndex),
+                  Integer.valueOf(this.columnDefinition.getFields().length) }),
+          MysqlErrorNumbers.SQL_STATE_ILLEGAL_ARGUMENT, getExceptionInterceptor());
     }
   }
 
@@ -647,10 +597,7 @@ public class ResultSetImpl extends NativeResultset implements ResultSetInternalM
   @Deprecated
   @Override
   public BigDecimal getBigDecimal(int columnIndex, int scale) throws SQLException {
-    checkRowPos();
-    checkColumnBounds(columnIndex);
     ValueFactory<BigDecimal> vf = new BigDecimalValueFactory(this.session.getPropertySet(), scale);
-    vf.setPropertySet(this.connection.getPropertySet());
     return this.thisRow.getValue(columnIndex - 1, vf);
   }
 
@@ -874,24 +821,7 @@ public class ResultSetImpl extends NativeResultset implements ResultSetInternalM
 
   @Override
   public String getString(int columnIndex) throws SQLException {
-    checkRowPos();
-    checkColumnBounds(columnIndex);
-
-    Field f = this.columnDefinition.getFields()[columnIndex - 1];
-    ValueFactory<String> vf = new StringValueFactory(this.session.getPropertySet());
-    String stringVal = this.thisRow.getValue(columnIndex - 1, vf);
-
-    if (this.padCharsWithSpace && stringVal != null && f.getMysqlTypeId() == MysqlType.FIELD_TYPE_STRING) {
-      int maxBytesPerChar = this.session.getServerSession().getCharsetSettings()
-          .getMaxBytesPerChar(f.getCollationIndex(), f.getEncoding());
-      int fieldLength = (int) f.getLength() /* safe, bytes in a CHAR <= 1024 */ / maxBytesPerChar; /*
-                                                                                                    * safe, this will
-                                                                                                    * never be 0
-                                                                                                    */
-      return StringUtils.padString(stringVal, fieldLength);
-    }
-
-    return stringVal;
+    return this.thisRow.getValue(columnIndex - 1, this.stringValueFactory);
   }
 
   @Override
@@ -922,6 +852,12 @@ public class ResultSetImpl extends NativeResultset implements ResultSetInternalM
   public Time getTime(int columnIndex) throws SQLException {
     checkRowPos();
     checkColumnBounds(columnIndex);
+
+    if (this.defaultTimestampValueFactory == null) {
+      this.defaultTimeValueFactory = new SqlTimeValueFactory(this.session.getPropertySet(), null,
+          this.session.getServerSession().getDefaultTimeZone(), this);
+    }
+
     return this.thisRow.getValue(columnIndex - 1, this.defaultTimeValueFactory);
   }
 
@@ -952,8 +888,6 @@ public class ResultSetImpl extends NativeResultset implements ResultSetInternalM
   }
 
   public LocalDate getLocalDate(int columnIndex) throws SQLException {
-    checkRowPos();
-    checkColumnBounds(columnIndex);
     return this.thisRow.getValue(columnIndex - 1, this.defaultLocalDateValueFactory);
   }
 
@@ -1122,9 +1056,6 @@ public class ResultSetImpl extends NativeResultset implements ResultSetInternalM
 
   @Override
   public Object getObject(int columnIndex) throws SQLException {
-    checkRowPos();
-    checkColumnBounds(columnIndex);
-
     int columnIndexMinusOne = columnIndex - 1;
 
     // we can't completely rely on code below because primitives have default values for null (e.g. int->0)
@@ -1220,7 +1151,7 @@ public class ResultSetImpl extends NativeResultset implements ResultSetInternalM
       return this.yearIsDateType ? getDate(columnIndex) : Short.valueOf(getShort(columnIndex));
 
     case DATE:
-      return getDate(columnIndex);
+      return getLocalDate(columnIndex);
 
     case TIME:
       return getTime(columnIndex);
@@ -1244,131 +1175,107 @@ public class ResultSetImpl extends NativeResultset implements ResultSetInternalM
           getExceptionInterceptor());
     }
 
-    synchronized (checkClosed().getConnectionMutex()) {
-      if (type.equals(String.class)) {
-        return (T) getString(columnIndex);
+    if (type.equals(String.class)) {
+      return (T) getString(columnIndex);
 
-      } else if (type.equals(BigDecimal.class)) {
-        return (T) getBigDecimal(columnIndex);
+    } else if (type.equals(BigDecimal.class)) {
+      return (T) getBigDecimal(columnIndex);
 
-      } else if (type.equals(BigInteger.class)) {
-        return (T) getBigInteger(columnIndex);
+    } else if (type.equals(BigInteger.class)) {
+      return (T) getBigInteger(columnIndex);
 
-      } else if (type.equals(Boolean.class) || type.equals(Boolean.TYPE)) {
-        checkRowPos();
-        checkColumnBounds(columnIndex);
-        return (T) this.thisRow.getValue(columnIndex - 1, this.booleanValueFactory);
+    } else if (type.equals(Boolean.class) || type.equals(Boolean.TYPE)) {
+      return (T) this.thisRow.getValue(columnIndex - 1, this.booleanValueFactory);
 
-      } else if (type.equals(Byte.class) || type.equals(Byte.TYPE)) {
-        checkRowPos();
-        checkColumnBounds(columnIndex);
-        return (T) this.thisRow.getValue(columnIndex - 1, this.byteValueFactory);
+    } else if (type.equals(Byte.class) || type.equals(Byte.TYPE)) {
+      return (T) this.thisRow.getValue(columnIndex - 1, this.byteValueFactory);
 
-      } else if (type.equals(Short.class) || type.equals(Short.TYPE)) {
-        checkRowPos();
-        checkColumnBounds(columnIndex);
-        return (T) this.thisRow.getValue(columnIndex - 1, this.shortValueFactory);
+    } else if (type.equals(Short.class) || type.equals(Short.TYPE)) {
+      return (T) this.thisRow.getValue(columnIndex - 1, this.shortValueFactory);
 
-      } else if (type.equals(Integer.class) || type.equals(Integer.TYPE)) {
-        checkRowPos();
-        checkColumnBounds(columnIndex);
-        return (T) this.thisRow.getValue(columnIndex - 1, this.integerValueFactory);
+    } else if (type.equals(Integer.class) || type.equals(Integer.TYPE)) {
+      return (T) this.thisRow.getValue(columnIndex - 1, this.integerValueFactory);
 
-      } else if (type.equals(Long.class) || type.equals(Long.TYPE)) {
-        checkRowPos();
-        checkColumnBounds(columnIndex);
-        return (T) this.thisRow.getValue(columnIndex - 1, this.longValueFactory);
+    } else if (type.equals(Long.class) || type.equals(Long.TYPE)) {
+      return (T) this.thisRow.getValue(columnIndex - 1, this.longValueFactory);
 
-      } else if (type.equals(Float.class) || type.equals(Float.TYPE)) {
-        checkRowPos();
-        checkColumnBounds(columnIndex);
-        return (T) this.thisRow.getValue(columnIndex - 1, this.floatValueFactory);
+    } else if (type.equals(Float.class) || type.equals(Float.TYPE)) {
+      return (T) this.thisRow.getValue(columnIndex - 1, this.floatValueFactory);
 
-      } else if (type.equals(Double.class) || type.equals(Double.TYPE)) {
-        checkRowPos();
-        checkColumnBounds(columnIndex);
-        return (T) this.thisRow.getValue(columnIndex - 1, this.doubleValueFactory);
+    } else if (type.equals(Double.class) || type.equals(Double.TYPE)) {
+      return (T) this.thisRow.getValue(columnIndex - 1, this.doubleValueFactory);
 
-      } else if (type.equals(byte[].class)) {
-        return (T) getBytes(columnIndex);
+    } else if (type.equals(byte[].class)) {
+      return (T) getBytes(columnIndex);
 
-      } else if (type.equals(Date.class)) {
-        return (T) getDate(columnIndex);
+    } else if (type.equals(Date.class)) {
+      return (T) getDate(columnIndex);
 
-      } else if (type.equals(Time.class)) {
-        return (T) getTime(columnIndex);
+    } else if (type.equals(Time.class)) {
+      return (T) getTime(columnIndex);
 
-      } else if (type.equals(Timestamp.class)) {
-        return (T) getTimestamp(columnIndex);
+    } else if (type.equals(Timestamp.class)) {
+      return (T) getTimestamp(columnIndex);
 
-      } else if (type.equals(java.util.Date.class)) {
-        Timestamp ts = getTimestamp(columnIndex);
-        return ts == null ? null : (T) java.util.Date.from(ts.toInstant());
+    } else if (type.equals(java.util.Date.class)) {
+      Timestamp ts = getTimestamp(columnIndex);
+      return ts == null ? null : (T) java.util.Date.from(ts.toInstant());
 
-      } else if (type.equals(java.util.Calendar.class)) {
-        return (T) getUtilCalendar(columnIndex);
+    } else if (type.equals(java.util.Calendar.class)) {
+      return (T) getUtilCalendar(columnIndex);
 
-      } else if (type.equals(Clob.class)) {
-        return (T) getClob(columnIndex);
+    } else if (type.equals(Clob.class)) {
+      return (T) getClob(columnIndex);
 
-      } else if (type.equals(Blob.class)) {
-        return (T) getBlob(columnIndex);
+    } else if (type.equals(Blob.class)) {
+      return (T) getBlob(columnIndex);
 
-      } else if (type.equals(Array.class)) {
-        return (T) getArray(columnIndex);
+    } else if (type.equals(Array.class)) {
+      return (T) getArray(columnIndex);
 
-      } else if (type.equals(Ref.class)) {
-        return (T) getRef(columnIndex);
+    } else if (type.equals(Ref.class)) {
+      return (T) getRef(columnIndex);
 
-      } else if (type.equals(URL.class)) {
-        return (T) getURL(columnIndex);
+    } else if (type.equals(URL.class)) {
+      return (T) getURL(columnIndex);
 
-      } else if (type.equals(Struct.class)) {
-        throw new SQLFeatureNotSupportedException();
+    } else if (type.equals(Struct.class)) {
+      throw new SQLFeatureNotSupportedException();
 
-      } else if (type.equals(RowId.class)) {
-        return (T) getRowId(columnIndex);
+    } else if (type.equals(RowId.class)) {
+      return (T) getRowId(columnIndex);
 
-      } else if (type.equals(NClob.class)) {
-        return (T) getNClob(columnIndex);
+    } else if (type.equals(NClob.class)) {
+      return (T) getNClob(columnIndex);
 
-      } else if (type.equals(SQLXML.class)) {
-        return (T) getSQLXML(columnIndex);
+    } else if (type.equals(SQLXML.class)) {
+      return (T) getSQLXML(columnIndex);
 
-      } else if (type.equals(LocalDate.class)) {
-        return (T) getLocalDate(columnIndex);
+    } else if (type.equals(LocalDate.class)) {
+      return (T) getLocalDate(columnIndex);
 
-      } else if (type.equals(LocalDateTime.class)) {
-        return (T) getLocalDateTime(columnIndex);
+    } else if (type.equals(LocalDateTime.class)) {
+      return (T) getLocalDateTime(columnIndex);
 
-      } else if (type.equals(LocalTime.class)) {
-        return (T) getLocalTime(columnIndex);
+    } else if (type.equals(LocalTime.class)) {
+      return (T) getLocalTime(columnIndex);
 
-      } else if (type.equals(OffsetDateTime.class)) {
-        checkRowPos();
-        checkColumnBounds(columnIndex);
-        return (T) this.thisRow.getValue(columnIndex - 1, this.defaultOffsetDateTimeValueFactory);
+    } else if (type.equals(OffsetDateTime.class)) {
+      return (T) this.thisRow.getValue(columnIndex - 1, this.defaultOffsetDateTimeValueFactory);
 
-      } else if (type.equals(OffsetTime.class)) {
-        checkRowPos();
-        checkColumnBounds(columnIndex);
-        return (T) this.thisRow.getValue(columnIndex - 1, this.defaultOffsetTimeValueFactory);
+    } else if (type.equals(OffsetTime.class)) {
+      return (T) this.thisRow.getValue(columnIndex - 1, this.defaultOffsetTimeValueFactory);
 
-      } else if (type.equals(ZonedDateTime.class)) {
-        checkRowPos();
-        checkColumnBounds(columnIndex);
-        return (T) this.thisRow.getValue(columnIndex - 1, this.defaultZonedDateTimeValueFactory);
+    } else if (type.equals(ZonedDateTime.class)) {
+      return (T) this.thisRow.getValue(columnIndex - 1, this.defaultZonedDateTimeValueFactory);
 
-      } else if (type.equals(Duration.class)) {
-        checkRowPos();
-        checkColumnBounds(columnIndex);
-        return (T) this.thisRow.getValue(columnIndex - 1, new DurationValueFactory(this.session.getPropertySet()));
-      }
-
-      throw SQLError.createSQLException("Conversion not supported for type " + type.getName(),
-          MysqlErrorNumbers.SQL_STATE_ILLEGAL_ARGUMENT,
-          getExceptionInterceptor());
+    } else if (type.equals(Duration.class)) {
+      return (T) this.thisRow.getValue(columnIndex - 1, new DurationValueFactory(this.session.getPropertySet()));
     }
+
+    throw SQLError.createSQLException("Conversion not supported for type " + type.getName(),
+        MysqlErrorNumbers.SQL_STATE_ILLEGAL_ARGUMENT,
+        getExceptionInterceptor());
   }
 
   @Override
@@ -1846,49 +1753,7 @@ public class ResultSetImpl extends NativeResultset implements ResultSetInternalM
       }
 
       try {
-        if (this.useUsageAdvisor) {
 
-          if (!calledExplicitly) {
-            this.eventSink.processEvent(ProfilerEvent.TYPE_USAGE, this.session, this.owningStatement, this, 0,
-                new Throwable(),
-                Messages.getString("ResultSet.ResultSet_implicitly_closed_by_driver"));
-          }
-
-          int resultSetSizeThreshold = locallyScopedConn.getPropertySet()
-              .getIntegerProperty(PropertyKey.resultSetSizeThreshold).getValue();
-          if (this.rowData.size() > resultSetSizeThreshold) {
-            this.eventSink.processEvent(ProfilerEvent.TYPE_USAGE, this.session, this.owningStatement, this, 0,
-                new Throwable(),
-                Messages.getString("ResultSet.Too_Large_Result_Set",
-                    new Object[] { Integer.valueOf(this.rowData.size()), Integer.valueOf(resultSetSizeThreshold) }));
-          }
-
-          if (!isLast() && !isAfterLast() && this.rowData.size() != 0) {
-            this.eventSink.processEvent(ProfilerEvent.TYPE_USAGE, this.session, this.owningStatement, this, 0,
-                new Throwable(),
-                Messages.getString("ResultSet.Possible_incomplete_traversal_of_result_set",
-                    new Object[] { Integer.valueOf(getRow()), Integer.valueOf(this.rowData.size()) }));
-          }
-
-          // Report on any columns that were selected but not referenced
-          if (this.columnUsed.length > 0 && !this.rowData.wasEmpty()) {
-            StringBuilder buf = new StringBuilder();
-            for (int i = 0; i < this.columnUsed.length; i++) {
-              if (!this.columnUsed[i]) {
-                if (buf.length() > 0) {
-                  buf.append(", ");
-                }
-                buf.append(this.columnDefinition.getFields()[i].getFullName());
-              }
-            }
-            if (buf.length() > 0) {
-              this.eventSink.processEvent(ProfilerEvent.TYPE_USAGE, this.session, this.owningStatement, this, 0,
-                  new Throwable(),
-                  Messages.getString("ResultSet.The_following_columns_were_never_referenced",
-                      new String[] { buf.toString() }));
-            }
-          }
-        }
       } finally {
         if (this.owningStatement != null && calledExplicitly) {
           this.owningStatement.removeOpenResultSet(this);
